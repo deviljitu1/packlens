@@ -1,0 +1,11 @@
+import { mkdir,writeFile } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
+const base=`http://127.0.0.1:${process.env.PORT||4310}`;
+async function call(url:string,body?:unknown){const r=await fetch(base+url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const result=await r.json();if(!r.ok)throw new Error(result.error||'Application request failed');return result;}
+const limit=Math.min(50,Number(process.argv[2]||50));const started=await call('/api/automation/start',{limit,pilotOnly:true});console.log('Automatic pilot:',JSON.stringify(started));
+let prior='';const start=Date.now();
+while(true){const [overview,visual]=await Promise.all([call('/api/overview'),call('/api/visual')]);const active=overview.tasks.filter((t:any)=>['QUEUED','RUNNING'].includes(t.status)).reduce((a:number,t:any)=>a+t.n,0),visualActive=visual.jobs.filter((j:any)=>['QUEUED','RUNNING'].includes(j.status)).length;const state=JSON.stringify({activeSearches:active,activeVisualReviews:visualActive,confidence:overview.matching,photos:overview.workflow.NEEDS_STORE_PHOTO||0,codexPaused:visual.pausedReason||null});if(state!==prior){console.log(state);prior=state;}
+  if(!active&&!visualActive){const result:any={at:new Date().toISOString(),elapsedSeconds:Math.round((Date.now()-start)/1000),pilotLimit:limit,overview,visual,commercialExport:null};try{result.commercialExport=await call('/api/export',{incremental:true});}catch(e){result.exportNote=(e as Error).message;}
+    await mkdir('test-results',{recursive:true});await writeFile('test-results/automatic-pilot.json',JSON.stringify(result,null,2));for(const kind of ['all','review','photo','audit']){const response=await fetch(base+'/api/reports/'+kind);await writeFile(`test-results/pilot-${kind}.csv`,await response.text());}console.log('AUTOMATIC PILOT COMPLETE',JSON.stringify({seconds:result.elapsedSeconds,confidence:overview.matching,export:result.commercialExport,exportNote:result.exportNote}));break;}
+  if(Date.now()-start>25*60*1000)throw new Error('Pilot remains queued after 25 minutes. Durable queue preserved; inspect source and quota health.');await sleep(4000);
+}

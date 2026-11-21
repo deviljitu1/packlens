@@ -1,0 +1,5 @@
+import { db,event,sources,saveSource,saveProduct } from '../src/db.js';
+let repaired=0;
+for(const s of sources())if(s.health.includes('Source paused:')){const match=s.health.match(/Blocked\/access challenge \(HTTP \d+\); source paused/);s.health=match?'BLOCKED: '+match[0]:'Source paused after an access error';saveSource(s);}
+for(const row of db.prepare("SELECT body FROM products WHERE matching='SOURCE_BLOCKED'").all() as {body:string}[]){const p=JSON.parse(row.body);if(p.workflow==='NEEDS_STORE_PHOTO'){p.workflow='FAILED';saveProduct(p);repaired++;}const retry=sources().filter(s=>s.enabled&&s.blockedUntil>Date.now()).map(s=>s.blockedUntil);if(retry.length)db.prepare('INSERT OR IGNORE INTO source_retries VALUES (?,?,1,?)').run(p.code,Math.min(...retry),'Source unavailable; retry after backoff');}
+event('','SOURCE_STATE_REPAIRED','Condensed source error and retained outage-affected jobs for retry',{repaired});console.log({repaired,sources:sources().filter(s=>s.blockedUntil>Date.now()).map(s=>({name:s.name,health:s.health,retryAt:new Date(s.blockedUntil).toISOString()}))});db.close();
